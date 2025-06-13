@@ -1,8 +1,7 @@
-
 import os
 import time
 import hashlib
-import re                                     
+import re
 from datetime import datetime
 import subprocess as sp
 import numpy as np
@@ -30,8 +29,8 @@ print(f"[INFO] GPU disponível: {USE_CUDA}")
 
 # ===== DIRETÓRIOS =====
 os.makedirs('output/plates', exist_ok=True)
+os.makedirs('output/plates_erros', exist_ok=True)
 os.makedirs('output/snapshots', exist_ok=True)
-os.makedirs('output/debug', exist_ok=True)
 
 # ===== MODELOS =====
 detector = YOLO(MODEL_PATH)
@@ -62,10 +61,9 @@ try:
         loop_start = time.time()
         raw_image = pipe.stdout.read(FRAME_WIDTH * FRAME_HEIGHT * 3)
         if len(raw_image) != FRAME_WIDTH * FRAME_HEIGHT * 3:
-            print(f"[{datetime.now():%H:%M:%S}] ⚠️ Frame corrompido. Pulando...")
+            print(f"[{datetime.now():%H:%M:%S}]  Frame corrompido. Pulando...")
             continue
 
-        # Verifica frame repetido
         frame_hash = hashlib.md5(raw_image).hexdigest()
         if frame_hash == last_frame_hash:
             continue
@@ -87,7 +85,6 @@ try:
             print(f"[{ts_snap}] 📸 Snapshot salvo em {snap_path}")
             last_snapshot_time += SNAPSHOT_INTERVAL
 
-        # Redimensiona para YOLO
         img = cv2.resize(roi, IMG_SIZE)
 
         try:
@@ -103,7 +100,6 @@ try:
             print(f"[YOLO] Erro: {e}")
             continue
 
-        # Processa resultados
         for r in results:
             boxes = r.boxes.xyxy.cpu().numpy()
             scores = r.boxes.conf.cpu().numpy()
@@ -111,7 +107,6 @@ try:
                 if score < CONF_THRESHOLD:
                     continue
 
-                # Ajusta coordenadas de volta ao ROI
                 h_ratio = roi.shape[0] / IMG_SIZE[1]
                 w_ratio = roi.shape[1] / IMG_SIZE[0]
                 x1o, y1o, x2o, y2o = [
@@ -120,7 +115,6 @@ try:
                 ]
                 plate_img = roi[y1o:y2o, x1o:x2o]
 
-                # ===== EXTRAÇÃO E LIMPEZA DO TEXTO =====
                 try:
                     texts_gray = reader.readtext(
                         cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY),
@@ -133,34 +127,39 @@ try:
                         paragraph=False
                     )
                     texts = texts_gray + texts_color
+                    print(f"[OCR DEBUG] Textos lidos (raw): {texts}")
 
-                    # limpa e extrai padrão AAA-0000
                     candidates = []
                     for t in texts:
                         raw = t.strip().upper()
-                        clean = re.sub(r'[^A-Z0-9]', '', raw)      # tira tudo que não for letra ou número
-                        m = re.search(r'[A-Z]{3}\d{4}', clean)     # busca três letras + quatro dígitos
+                        clean = re.sub(r'[^A-Z0-9]', '', raw)
+                        clean = clean.replace('O', '0').replace('I', '1').replace('L', '1')
+                        m = re.search(r'[A-Z0-9]{7}', clean)
                         if m:
                             p = m.group()
-                            # insere hífen no meio: 'ABC1234' → 'ABC-1234'
                             p = p[:3] + '-' + p[3:]
                             candidates.append(p)
 
+                    print(f"[OCR DEBUG] Placas possíveis (candidatas): {candidates}")
                     placa = candidates[0] if candidates else None
 
                 except Exception as e:
                     print(f"[OCR] Erro: {e}")
                     placa = None
 
-                # só salva/nomeia se diferente da última e não for None
                 if placa and placa != last_plate:
                     last_plate = placa
                     ts_plate = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    out_path = f"output/plates/{placa}_{ts_plate}.jpg"
+                    out_path = f"output/plates/{ts_plate}_{placa}.jpg"
                     cv2.imwrite(out_path, plate_img)
-                    print(f"[{ts_plate}] ✅ Placa: {placa}, conf={score:.2f} → {out_path}")
+                    print(f"[{ts_plate}]  Placa: {placa}, conf={score:.2f} → {out_path}")
 
-                # desenha retângulo e label
+                if not placa:
+                    ts_fail = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    erro_path = f"output/plates_erros/{ts_fail}_falha.jpg"
+                    cv2.imwrite(erro_path, plate_img)
+                    print(f"[{ts_fail}] ❌ OCR não encontrou placa → {erro_path}")
+
                 cv2.rectangle(roi_draw, (x1o, y1o), (x2o, y2o), (0, 255, 0), 2)
                 label = placa if placa else "Desconhecida"
                 cv2.putText(
@@ -168,18 +167,20 @@ try:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
                 )
 
-        # debug e tempo de loop
         timestamp_dbg = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         cv2.putText(
             roi_draw, timestamp_dbg, (10, roi.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
         )
-        debug_path = f"output/debug/frame_{datetime.now().strftime('%H%M%S')}.jpg"
-        cv2.imwrite(debug_path, roi_draw)
+
+        cv2.imshow("Monitoramento – ROI com Detecção", roi_draw)
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
 
         print(f"[DEBUG] Loop: {time.time() - loop_start:.2f}s")
 
 except KeyboardInterrupt:
-    print(f"[{datetime.now():%H:%M:%S}] 🛑 Interrompido pelo usuário.")
+    print(f"[{datetime.now():%H:%M:%S}] Interrompido pelo usuário.")
 finally:
     pipe.terminate()
+    cv2.destroyAllWindows()
