@@ -1,0 +1,26 @@
+# Ambientes virtuais
+venv/
+.env
+
+# Arquivos Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs e bancos locais
+*.log
+*.sqlite3
+
+# VS Code
+.vscode/
+
+# Cache ou arquivos temporários
+*.tmp
+*.bak
+*.old
+.DS_Store
+Thumbs.db
+
+# Saídas geradas
+output/
